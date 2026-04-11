@@ -19,6 +19,8 @@ import Data.Monoid
 import Data.Word
 import TextShow.Debug.Trace
 
+import Data.Maybe (mapMaybe)
+
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Vector as V
@@ -50,8 +52,18 @@ decodeBlpMipmaps bs = do
   case blpExt $ traceTextShowId blp of
     BlpJpeg {..} -> do
       let jpegs = (blpJpegHeader <>) `fmap` blpJpegData
-      mips <- mapM decodeJpeg jpegs
-      return $ toPngRepresentable <$> mips
+      case jpegs of
+        [] -> Left "No JPEG mipmap data in BLP"
+        (j0:js) -> do
+          -- Mipmap 0 is the full-resolution image; single-image callers
+          -- (`decodeBlp`) only ever take `head` of the result. Decoding it
+          -- strictly means a failure here still fails the whole file as
+          -- before. Tail mipmaps are produced lazily by mapMaybe, so a
+          -- corrupt tail can no longer poison the main image via mapM's
+          -- short-circuit in Either.
+          mip0 <- decodeJpeg j0
+          let lazyTail = mapMaybe (either (const Nothing) Just . decodeJpeg) js
+          Right $ toPngRepresentable <$> (mip0 : lazyTail)
 
     BlpUncompressed1 {..} -> do
       let mkImage mip = ImageRGBA8 $ generateImage (gen mip) (fromIntegral $ blpWidth blp) (fromIntegral $ blpHeight blp)
