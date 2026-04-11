@@ -18,7 +18,7 @@ import Control.Monad
 import Data.Attoparsec.ByteString as AT
 import Data.Bits
 import Data.ByteString (ByteString)
-import Data.List (nub)
+import Data.List (nub, sortOn)
 import Data.Word
 
 import qualified Data.Vector as V
@@ -27,8 +27,8 @@ import qualified Data.ByteString as BS
 
 import Codec.Picture.Blp.Internal.Data
 
-blpParser :: Parser BlpStruct
-blpParser = do
+blpParser :: Int -> Parser BlpStruct
+blpParser inputLen = do
   _ <- blpVersion
   blpCompression <- compressionParser
   blpFlags <- flagsParser
@@ -38,7 +38,16 @@ blpParser = do
   blpPictureSubType <- dword <?> "picture subtype"
   blpMipMapOffset <- replicateM 16 dword <?> "mipmaps offsets"
   blpMipMapSize <- replicateM 16 dword <?> "mipmaps sizes"
-  let mipMapsInfo = nub . filter ((> 0) . snd) $ blpMipMapOffset `zip` blpMipMapSize
+  -- BLP1 specifies 16 mipmap slots but most files only use a handful; the
+  -- unused slots should be zero but some real-world files contain garbage
+  -- offsets/sizes left behind by the writing tool. Drop any slot whose
+  -- advertised range would run past the end of the file, then sort the
+  -- survivors by offset so that the monotonic `skipToOffset` walks forward
+  -- correctly even if the file stored mipmaps out of order.
+  let rawMipMapsInfo = nub . filter ((> 0) . snd) $ blpMipMapOffset `zip` blpMipMapSize
+      fitsInput (o, s) =
+        fromIntegral o + fromIntegral s <= (fromIntegral inputLen :: Integer)
+      mipMapsInfo = sortOn fst $ filter fitsInput rawMipMapsInfo
   blpExt <- case blpCompression of
     BlpCompressionJPEG -> blpJpegParser mipMapsInfo
     BlpCompressionUncompressed -> case blpPictureType of
@@ -150,4 +159,4 @@ blpUncompressed2Parser mps = do
   return $ BlpUncompressed2 {..}
 
 parseBlp :: ByteString -> Either String BlpStruct
-parseBlp = parseOnly blpParser
+parseBlp bs = parseOnly (blpParser (BS.length bs)) bs
