@@ -106,6 +106,7 @@ pictureTypeParser :: Parser BlpPictureType
 pictureTypeParser = (<?> "picture type") $ do
   i <- dword
   case i of
+    0 -> return UncompressedWithAlpha
     2 -> return JPEGType
     3 -> return UncompressedWithAlpha
     4 -> return UncompressedWithAlpha
