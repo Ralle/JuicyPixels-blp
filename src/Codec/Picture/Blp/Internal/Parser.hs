@@ -47,7 +47,21 @@ blpParser inputLen = do
   let rawMipMapsInfo = nub . filter ((> 0) . snd) $ blpMipMapOffset `zip` blpMipMapSize
       fitsInput (o, s) =
         fromIntegral o + fromIntegral s <= (fromIntegral inputLen :: Integer)
-      mipMapsInfo = sortOn fst $ filter fitsInput rawMipMapsInfo
+      -- Sorting is not enough on its own. `skipToOffset` only ever moves
+      -- forward, so a slot starting inside a range that has already been
+      -- consumed can never be reached: the skip stays where it is, the
+      -- following `take` reads the wrong bytes, and every later mipmap is
+      -- dragged forward until the walk runs off the end of the file. Slots
+      -- holding garbage that points back into mipmap 0 are common enough in
+      -- the wild to matter, so keep only a forward-progressing run.
+      dropOverlapping :: Integer -> [(Word32, Word32)] -> [(Word32, Word32)]
+      dropOverlapping _ [] = []
+      dropOverlapping end (slot@(o, s) : rest)
+        | fromIntegral o >= end =
+            slot : dropOverlapping (fromIntegral o + fromIntegral s) rest
+        | otherwise = dropOverlapping end rest
+      mipMapsInfo =
+        dropOverlapping 0 . sortOn fst . filter fitsInput $ rawMipMapsInfo
   blpExt <- case blpCompression of
     BlpCompressionJPEG -> blpJpegParser mipMapsInfo
     BlpCompressionUncompressed -> case blpPictureType of
