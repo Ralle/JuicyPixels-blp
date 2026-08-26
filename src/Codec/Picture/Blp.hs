@@ -62,8 +62,13 @@ decodeBlpMipmaps bs = do
           -- corrupt tail can no longer poison the main image via mapM's
           -- short-circuit in Either.
           mip0 <- decodeJpeg j0
-          let lazyTail = mapMaybe (either (const Nothing) Just . decodeJpeg) js
-          Right $ toPngRepresentable <$> (mip0 : lazyTail)
+          -- The alpha decision is taken once, from the full size mipmap, so
+          -- that every mipmap of a texture is decoded the same way. Smaller
+          -- mipmaps are often padded out with a flat alpha plane of their own.
+          let useAlpha = BlpFlagAlphaChannel `elem` blpFlags blp
+                && jpegAlphaIsUsable mip0
+              lazyTail = mapMaybe (either (const Nothing) Just . decodeJpeg) js
+          Right $ fromBlpJpeg useAlpha <$> (mip0 : lazyTail)
 
     BlpUncompressed1 {..} -> do
       let mkImage mip = ImageRGBA8 $ generateImage (gen mip) (fromIntegral $ blpWidth blp) (fromIntegral $ blpHeight blp)
